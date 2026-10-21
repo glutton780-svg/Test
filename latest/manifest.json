@@ -1,5 +1,6 @@
 [
     "downloader.ps1",
+    "hellotest1.txt",
     "run_downloader.bat",
     "run_uploader.bat",
     "uploader.ps1"
