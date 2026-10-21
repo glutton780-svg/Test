@@ -1,0 +1,6 @@
+[
+    "downloader.ps1",
+    "run_downloader.bat",
+    "run_uploader.bat",
+    "uploader.ps1"
+]
