@@ -18,7 +18,7 @@
 
 # ---- CONFIG: same repo/branch as app/updater.py -----------------
 $repoUser = "glutton780-svg"
-$repoName = "Macro-hub"
+$repoName = "Test"
 $branch   = "main"
 # -------------------------------------------------------------------
 

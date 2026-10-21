@@ -98,6 +98,26 @@ if (-not (Test-Git)) {
         winget install --id Git.Git -e --source winget --accept-package-agreements --accept-source-agreements
         Update-SessionPath
     }
+    # Fallback: winget missing or failed - download the official Git
+    # for Windows installer from GitHub and run it silently.
+    if (-not (Test-Git)) {
+        Write-Host "winget didn't work - downloading the Git installer directly..."
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            $release = Invoke-RestMethod -Uri "https://api.github.com/repos/git-for-windows/git/releases/latest" -Headers @{ "User-Agent" = "uploader-script" }
+            if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { $pattern = "Git-*-arm64.exe" } else { $pattern = "Git-*-64-bit.exe" }
+            $asset = $release.assets | Where-Object { $_.name -like $pattern } | Select-Object -First 1
+            if (-not $asset) { throw "no matching installer found in the latest release" }
+            $installer = Join-Path $env:TEMP $asset.name
+            Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $installer -UseBasicParsing
+            Write-Host "Installing Git (accept the Windows prompt if one appears)..."
+            Start-Process -FilePath $installer -ArgumentList "/VERYSILENT /NORESTART /NOCANCEL /SP-" -Wait
+            Remove-Item $installer -Force -ErrorAction SilentlyContinue
+            Update-SessionPath
+        } catch {
+            Write-Host "Direct download failed: $_"
+        }
+    }
     if (-not (Test-Git)) {
         Start-Process "https://git-scm.com/download/win"
         Stop-Script "Couldn't install Git automatically. I opened the download page - install it (default options are fine), then run this again."
@@ -196,6 +216,53 @@ Write-Host "Publishing to $RepoLabel (branch: $Branch)"
 
 # Does that branch exist on the remote yet? (A brand-new empty repo won't have one.)
 $remoteHasBranch = [bool](git ls-remote --heads $RemoteUrl $Branch 2>$null)
+
+# ----------------------------------------------------------
+# Step 4b: point downloader.ps1 at this same repo
+#
+# The downloader is a standalone file with the repo written inside it
+# (it has to be - on a fresh machine there's nothing else to read the
+# repo from yet). So every time this script runs, it rewrites the
+# $repoUser / $repoName / $branch lines in any downloader.ps1 it finds
+# (project root, tools/, or next to this script). The copy you hand out
+# is then always aimed at the repo you just published to.
+# ----------------------------------------------------------
+if ($RemoteUrl -match 'github\.com[:/]+([^/]+)/([^/]+?)(\.git)?/?$') {
+    $dlUser = $Matches[1]
+    $dlName = $Matches[2]
+
+    $downloaderPaths = @(
+        (Join-Path $root "downloader.ps1"),
+        (Join-Path $root "tools\downloader.ps1"),
+        (Join-Path $PSScriptRoot "downloader.ps1")
+    ) | Where-Object { Test-Path $_ } | ForEach-Object { (Resolve-Path $_).Path } | Select-Object -Unique
+
+    foreach ($dl in $downloaderPaths) {
+        $text = [IO.File]::ReadAllText($dl)
+
+        if ($text -notmatch '(?m)^\s*\$repoUser\s*=') {
+            Write-Host "Couldn't find the repo settings in $dl - leaving it alone."
+            continue
+        }
+
+        $new = $text
+        $new = [regex]::Replace($new, '(?m)^(\s*\$repoUser\s*=\s*)"[^"]*"', ('${1}"' + $dlUser + '"'))
+        $new = [regex]::Replace($new, '(?m)^(\s*\$repoName\s*=\s*)"[^"]*"', ('${1}"' + $dlName + '"'))
+        $new = [regex]::Replace($new, '(?m)^(\s*\$branch\s*=\s*)"[^"]*"', ('${1}"' + $Branch + '"'))
+
+        if ($new -ne $text) {
+            [IO.File]::WriteAllText($dl, $new, (New-Object System.Text.UTF8Encoding($false)))
+            Write-Host "Updated $dl -> $dlUser/$dlName (branch: $Branch)"
+        } else {
+            Write-Host "Downloader already points at $dlUser/$dlName (branch: $Branch)."
+        }
+    }
+    if (-not $downloaderPaths) {
+        Write-Host "No downloader.ps1 found next to the project - skipping downloader update."
+    }
+} else {
+    Write-Host "Repo isn't on github.com, so the downloader (which uses raw.githubusercontent.com) can't be pointed at it - skipping."
+}
 
 # ----------------------------------------------------------
 # Step 5: attach this folder to the repo (or switch repos)
